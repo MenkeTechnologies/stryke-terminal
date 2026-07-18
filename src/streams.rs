@@ -3,8 +3,8 @@
 //! A [`Stream`] is a state machine that parses a stream of characters and
 //! dispatches events to a [`Listener`]. pyte implements the parser as a Python
 //! generator-coroutine (`_parser_fsm`); here it is reified into an explicit
-//! [`State`] enum stepped one character at a time by [`Stream::advance`]. Every
-//! branch corresponds 1:1 to a branch of the Python FSM.
+//! `State` enum stepped one character at a time by an internal `advance` step.
+//! Every branch corresponds 1:1 to a branch of the Python FSM.
 //!
 //! [`Stream`] also folds in pyte's `ByteStream`: [`Stream::feed_bytes`] decodes
 //! bytes as UTF-8 (incrementally, with U+FFFD replacement) or Latin-1 depending
