@@ -1,0 +1,25 @@
+#!/usr/bin/env stryke
+# examples/terminal_basic.stk — feed raw terminal output, read the rendered
+# screen. No PTY needed; this is the pure emulator.
+#
+#   stryke examples/terminal_basic.stk
+
+use Terminal
+
+val $t = Terminal::new(columns => 30, lines => 4)
+
+# The kind of bytes a program writes: text, a cursor move, more text.
+Terminal::feed($t, "top-left")
+Terminal::feed($t, "\x1b[2;10Hmid")           # ESC[2;10H → row 2, col 10
+Terminal::feed($t, "\x1b[4;1Hbottom row")
+
+p "rendered screen:"
+for $line (Terminal::display($t)) {
+    p "  |$line|"
+}
+
+val $c = Terminal::cursor($t)
+p ""
+p "cursor at (x=$c->{x}, y=$c->{y})"
+
+Terminal::destroy($t)

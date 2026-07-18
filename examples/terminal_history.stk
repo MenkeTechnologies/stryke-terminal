@@ -1,0 +1,39 @@
+#!/usr/bin/env stryke
+# examples/terminal_history.stk — a screen with scrollback. Feed more lines than
+# fit, then page up and down through history.
+#
+#   stryke examples/terminal_history.stk
+
+use Terminal
+
+val $t = Terminal::new(columns => 12, lines => 4, kind => "history", history => 50)
+
+# Emit 12 lines into a 4-line screen — 8 scroll off into history.
+for $i (1 : 12) {
+    Terminal::feed($t, "line $i\r\n")
+}
+
+p "bottom of buffer (most recent):"
+for $line (Terminal::display($t)) {
+    p "  |$line|"
+}
+
+val $h = Terminal::history($t)
+p ""
+p "history: position=$h->{position} size=$h->{size} top=$h->{top} bottom=$h->{bottom}"
+
+Terminal::prev_page($t)
+p ""
+p "after prev_page (scrolled up into history):"
+for $line (Terminal::display($t)) {
+    p "  |$line|"
+}
+
+Terminal::next_page($t)
+p ""
+p "after next_page (back down):"
+for $line (Terminal::display($t)) {
+    p "  |$line|"
+}
+
+Terminal::destroy($t)

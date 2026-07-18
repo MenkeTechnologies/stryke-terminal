@@ -1,0 +1,128 @@
+## t/test_terminal.stk — assertion tests for the stryke `Terminal` package.
+##
+## Uses stryke's native test framework (`assert_*`). Exercises the emulator
+## through the FFI surface: feed escape/CSI/OSC input and assert the rendered
+## screen, cursor, cell attributes, modes, title, device reports, disassembler,
+## and scrollback all match. Permission-free — no PTY, no subprocess, no
+## network — so it runs unattended in CI.
+##
+## Live PTY automation (pty_spawn + Terminal::drain) needs a child process, so
+## it is exercised by `examples/terminal_pty.stk`, not asserted here.
+
+use Terminal
+
+# ── session lifecycle + plain text ──────────────────────────────────
+val $t = Terminal::new(columns => 20, lines => 3)
+assert_ge $t, 1, "new returns a positive session id"
+
+Terminal::feed($t, "hello world")
+val @disp = Terminal::display($t)
+assert_eq scalar(@disp), 3, "display has one string per line"
+assert_contains $disp[0], "hello world", "plain text rendered on line 0"
+
+# ── cursor movement (CSI CUP) ───────────────────────────────────────
+Terminal::feed($t, "\x1b[2;5HX")
+val $cur = Terminal::cursor($t)
+assert_eq $cur->{y}, 1, "ESC[2;5H moved cursor to row index 1"
+assert_eq $cur->{x}, 5, "cursor advanced to column 5 after drawing X"
+assert_eq Terminal::cell($t, 4, 1)->{data}, "X", "X drawn at (4,1)"
+
+# ── SGR: colors + attributes on a cell ──────────────────────────────
+val $s = Terminal::new(columns => 12, lines => 2)
+Terminal::feed($s, "\x1b[1;31mR")
+val $rc = Terminal::cell($s, 0, 0)
+assert_eq $rc->{data}, "R",   "bold-red char drawn"
+assert_eq $rc->{fg},   "red", "SGR 31 sets fg red"
+assert_ok $rc->{bold},        "SGR 1 sets bold"
+
+Terminal::feed($s, "\x1b[38;5;196mZ")
+assert_eq Terminal::cell($s, 1, 0)->{fg}, "ff0000", "SGR 38;5;196 → 256-color hex"
+
+Terminal::feed($s, "\x1b[38;2;10;20;30mT")
+assert_eq Terminal::cell($s, 2, 0)->{fg}, "0a141e", "SGR 38;2;r;g;b → truecolor hex"
+Terminal::destroy($s)
+
+# ── SGR reset ───────────────────────────────────────────────────────
+val $r = Terminal::new(columns => 8, lines => 1)
+Terminal::feed($r, "\x1b[1;31mA\x1b[0mB")
+assert_ok  Terminal::cell($r, 0, 0)->{bold}, "A is bold before reset"
+assert_eq  Terminal::cell($r, 1, 0)->{bold}, 0, "B is not bold after SGR 0"
+assert_eq  Terminal::cell($r, 1, 0)->{fg}, "default", "B fg reset to default"
+Terminal::destroy($r)
+
+# ── erase in line ───────────────────────────────────────────────────
+val $e = Terminal::new(columns => 10, lines => 1)
+Terminal::feed($e, "abcdefg")
+Terminal::feed($e, "\x1b[4D\x1b[K")
+assert_contains Terminal::line($e, 0), "abc", "erase-to-end keeps text left of cursor"
+assert_eq Terminal::cell($e, 6, 0)->{data}, " ", "erase-to-end blanked column 6"
+Terminal::destroy($e)
+
+# ── modes: DECAWM + DECTCEM are set by default ──────────────────────
+val @modes = Terminal::mode($t)
+var %mset = map { $_ => 1 } @modes
+assert_ok $mset{224}, "DECAWM (7<<5) set by default"
+assert_ok $mset{800}, "DECTCEM (25<<5) set by default"
+
+# ── dirty tracking ──────────────────────────────────────────────────
+val @dirty = Terminal::dirty($t)
+assert_ge scalar(@dirty), 1, "feeding text marks lines dirty"
+Terminal::clear_dirty($t)
+assert_eq scalar(Terminal::dirty($t)), 0, "clear_dirty empties the dirty set"
+
+# ── OSC title ───────────────────────────────────────────────────────
+val $ti = Terminal::new(columns => 10, lines => 1)
+Terminal::feed($ti, "\x1b]2;My Title\x07")
+assert_eq Terminal::title($ti), "My Title", "OSC 2 sets the terminal title"
+Terminal::feed($ti, "\x1b]1;IconX\x07")
+assert_eq Terminal::icon_name($ti), "IconX", "OSC 1 sets the icon name"
+Terminal::destroy($ti)
+
+# ── device status report is captured for forwarding ─────────────────
+val $d = Terminal::new(columns => 10, lines => 3)
+Terminal::feed($d, "\x1b[2;5H\x1b[6n")
+val $reply = Terminal::take_input($d)
+assert_eq $reply, "\x1b[2;5R", "DSR 6 reports cursor position into take_input"
+assert_eq Terminal::take_input($d), "", "take_input drains the buffer"
+Terminal::destroy($d)
+
+# ── direct commands drive the screen without escapes ────────────────
+val $c = Terminal::new(columns => 10, lines => 4)
+Terminal::cursor_position($c, 3, 2)
+Terminal::draw($c, "hi")
+assert_eq Terminal::cell($c, 1, 2)->{data}, "h", "direct cursor_position + draw"
+Terminal::sgr($c, 4)
+Terminal::draw($c, "u")
+assert_ok Terminal::cell($c, 3, 2)->{underscore}, "direct sgr(4) sets underscore"
+Terminal::destroy($c)
+
+# ── resize ──────────────────────────────────────────────────────────
+Terminal::resize($t, 5, 30)
+val $sz = Terminal::size($t)
+assert_eq $sz->{lines}, 5,    "resize updated line count"
+assert_eq $sz->{columns}, 30, "resize updated column count"
+
+# ── disassembler ────────────────────────────────────────────────────
+val $ev = Terminal::dis("\x1b[3;4H")
+assert_eq $ev->[0][0], "cursor_position", "dis decodes CSI H as cursor_position"
+assert_eq $ev->[0][1][0], 3, "dis captures first param"
+assert_eq $ev->[0][1][1], 4, "dis captures second param"
+
+val $ev2 = Terminal::dis("\x1b[Jfoo")
+assert_eq $ev2->[0][0], "erase_in_display", "dis: ESC[J → erase_in_display"
+assert_eq $ev2->[1][0], "draw",             "dis: trailing text → draw"
+assert_eq $ev2->[1][1][0], "foo",           "dis: draw carries the text"
+
+# ── scrollback history ──────────────────────────────────────────────
+val $h = Terminal::new(columns => 4, lines => 3, kind => "history", history => 10)
+Terminal::feed($h, "1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8")
+val $before = Terminal::history($h)
+assert_eq $before->{position}, $before->{size}, "history starts at the bottom"
+Terminal::prev_page($h)
+val $after = Terminal::history($h)
+assert_lt $after->{position}, $before->{position}, "prev_page scrolls up into history"
+Terminal::destroy($h)
+
+# ── cleanup ─────────────────────────────────────────────────────────
+Terminal::destroy($t)
+assert_eq scalar(Terminal::sessions()), 0, "all sessions destroyed"

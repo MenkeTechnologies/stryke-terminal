@@ -1,0 +1,30 @@
+#!/usr/bin/env stryke
+# examples/terminal_pty.stk — the headline feature: control a full terminal
+# headless. strykelang's built-in pty_* spawns and talks to the process;
+# Terminal renders what it draws.
+#
+#   stryke examples/terminal_pty.stk
+
+use Terminal
+
+# Spawn a program in a real PTY (pty_spawn is a strykelang builtin, not part of
+# this package). A shell that emits colored, cursor-addressed output:
+val $h = pty_spawn("bash --noprofile --norc -c 'printf \"\\033[32mgreen\\033[0m\\r\\n\\033[1;4mbold-under\\033[0m\\r\\n\"; printf \"\\033[3;5Hplaced\"'")
+
+val $t = Terminal::new(columns => 40, lines => 6)
+
+# Pump the process output through the emulator until it goes idle.
+Terminal::drain($t, $h, 1)
+
+p "what the program actually drew on screen:"
+for $line (Terminal::display($t)) {
+    p "  |$line|"
+}
+
+# The styling survived the round-trip:
+val $g = Terminal::cell($t, 0, 0)
+p ""
+p "cell(0,0): data='$g->{data}' fg=$g->{fg}"
+
+pty_close($h)
+Terminal::destroy($t)

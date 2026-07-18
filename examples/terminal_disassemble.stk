@@ -1,0 +1,30 @@
+#!/usr/bin/env stryke
+# examples/terminal_disassemble.stk — decode an escape/CSI/OSC string into its
+# parsed events (a stryke-native escape-sequence disassembler, like
+# `python -m pyte`).
+#
+#   stryke examples/terminal_disassemble.stk
+
+use Terminal
+
+var @samples = (
+    "\x1b[3;4Hfoo",          # move cursor, then draw
+    "\x1b[1;31m",            # SGR bold red
+    "\x1b[2J",               # clear screen
+    "\x1b]2;My Window\x07",  # OSC set title
+    "\x1b[?25l",             # hide cursor (private mode)
+)
+
+for $s (@samples) {
+    # Show the input with control bytes escaped for readability.
+    var $shown = $s
+    $shown =~ s/\x1b/ESC/g
+    p "input: $shown"
+    val $events = Terminal::dis($s)
+    for $ev (@$events) {
+        val $name = $ev->[0]
+        val @args = @{ $ev->[1] }
+        p "   $name(" . join(", ", @args) . ")"
+    }
+    p ""
+}

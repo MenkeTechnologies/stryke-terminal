@@ -1,0 +1,465 @@
+## lib/Terminal.stk — headless VTXXX terminal emulator for stryke (`use Terminal`).
+##
+## Thin wrapper around the `stryke-terminal` cdylib's `terminal__*` exports (a
+## faithful port of pyte). The cdylib is dlopened in-process on first `use
+## Terminal` and registers each export as a stryke-callable function; every
+## wrapper here builds a JSON args dict, calls the FFI symbol, and parses the
+## JSON return. Emulator sessions (a screen + its parser) persist across calls,
+## so a script creates a terminal once and feeds it across many calls.
+##
+## Role in the stack: strykelang already ships the PTY/Expect builtins
+## (`pty_spawn`, `pty_read`, `pty_send`, `pty_expect`, …) that hand back the raw
+## bytes a program writes. Terminal is the missing *screen model* — feed it
+## those bytes and read the rendered grid, cursor, colors, modes, and scrollback
+## a human would see. It does NOT spawn PTYs.
+##
+##   val $h = pty_spawn("htop")        # strykelang builtin
+##   val $t = Terminal::new(columns => 80, lines => 24)
+##   Terminal::drain($t, $h, 1)        # pump pty_read → feed, return display
+##   p Terminal::display($t)           # the rendered screen
+
+package Terminal
+
+# ── error dispatch ────────────────────────────────────────────────────
+
+## Decode the JSON returned by a `terminal__*` FFI call and die with a
+## descriptive message when the cdylib reported an error.
+fn Terminal::_decode ($name, $json) {
+    val $o = from_json $json
+    if (ref $o eq "HASH" && exists $o->{error}) {
+        die "Terminal::$name: $o->{error}"
+    }
+    $o
+}
+
+## Session-only command: build `{ session => $t }`, call `$ffi`, decode, return 1.
+fn Terminal::_bare ($t, $name, $json) {
+    Terminal::_decode($name, $json)
+    1
+}
+
+# ── session lifecycle ────────────────────────────────────────────────
+
+## Create a new emulator session and return its integer id.
+##   %opts: columns (default 80), lines (default 24), kind ("screen" |
+##          "history"), history (scrollback lines, default 100), ratio (page
+##          fraction, default 0.5).
+fn Terminal::new (%opts) {
+    var %args = (
+        columns => exists $opts{columns} ? $opts{columns} : 80,
+        lines   => exists $opts{lines}   ? $opts{lines}   : 24,
+    )
+    $args{kind}    = $opts{kind}    if defined $opts{kind}
+    $args{history} = $opts{history} if defined $opts{history}
+    $args{ratio}   = $opts{ratio}   if defined $opts{ratio}
+    val $o = Terminal::_decode("new", terminal__new(to_json(\%args)))
+    $o->{session}
+}
+
+## Destroy a session, freeing its screen. Returns 1.
+fn Terminal::destroy ($t) {
+    Terminal::_decode("destroy", terminal__destroy(to_json({ session => $t })))
+    1
+}
+
+## List of live session ids → @ids.
+fn Terminal::sessions {
+    val $arr = Terminal::_decode("sessions", terminal__sessions("{}"))
+    @$arr
+}
+
+## Reset the terminal to its power-on state.
+fn Terminal::reset ($t) {
+    Terminal::_bare($t, "reset", terminal__reset(to_json({ session => $t })))
+}
+
+## Resize the screen to $lines × $columns.
+fn Terminal::resize ($t, $lines, $columns) {
+    Terminal::_bare($t, "resize",
+        terminal__resize(to_json({ session => $t, lines => $lines, columns => $columns })))
+}
+
+## { columns, lines } of the current screen → hashref.
+fn Terminal::size ($t) {
+    Terminal::_decode("size", terminal__size(to_json({ session => $t })))
+}
+
+# ── feeding ──────────────────────────────────────────────────────────
+
+## Feed a chunk of terminal output (text) into the parser.
+fn Terminal::feed ($t, $data) {
+    Terminal::_bare($t, "feed", terminal__feed(to_json({ session => $t, data => $data })))
+}
+
+## Feed raw bytes (base64-encoded) — use when output may not be valid UTF-8.
+fn Terminal::feed_bytes ($t, $base64) {
+    Terminal::_bare($t, "feed_bytes",
+        terminal__feed_bytes(to_json({ session => $t, base64 => $base64 })))
+}
+
+# ── reading the rendered screen ──────────────────────────────────────
+
+## Screen contents, one string per line → @lines.
+fn Terminal::display ($t) {
+    val $arr = Terminal::_decode("display", terminal__display(to_json({ session => $t })))
+    @$arr
+}
+
+## A single rendered line $y → string.
+fn Terminal::line ($t, $y) {
+    Terminal::_decode("line", terminal__line(to_json({ session => $t, y => $y })))
+}
+
+## The styled character at ($x, $y) → hashref
+## { data, fg, bg, bold, italics, underscore, strikethrough, reverse, blink }.
+fn Terminal::cell ($t, $x, $y) {
+    Terminal::_decode("cell", terminal__cell(to_json({ session => $t, x => $x, y => $y })))
+}
+
+## The full styled buffer → arrayref of rows, each an arrayref of cell hashrefs.
+fn Terminal::buffer ($t) {
+    Terminal::_decode("buffer", terminal__buffer(to_json({ session => $t })))
+}
+
+## Cursor state → hashref { x, y, hidden, attrs }.
+fn Terminal::cursor ($t) {
+    Terminal::_decode("cursor", terminal__cursor(to_json({ session => $t })))
+}
+
+## Line numbers that changed since the last clear → @ys.
+fn Terminal::dirty ($t) {
+    val $arr = Terminal::_decode("dirty", terminal__dirty(to_json({ session => $t })))
+    @$arr
+}
+
+## Clear the dirty-line set.
+fn Terminal::clear_dirty ($t) {
+    Terminal::_bare($t, "clear_dirty", terminal__clear_dirty(to_json({ session => $t })))
+}
+
+## Terminal title (set via OSC 0/2) → string.
+fn Terminal::title ($t) {
+    Terminal::_decode("title", terminal__title(to_json({ session => $t })))
+}
+
+## Icon name (set via OSC 0/1) → string.
+fn Terminal::icon_name ($t) {
+    Terminal::_decode("icon_name", terminal__icon_name(to_json({ session => $t })))
+}
+
+## Active terminal mode numbers → @ints (private modes are the pyte-shifted
+## values, e.g. DECAWM = 224).
+fn Terminal::mode ($t) {
+    val $arr = Terminal::_decode("mode", terminal__mode(to_json({ session => $t })))
+    @$arr
+}
+
+## Drain and return any device-report output the emulator produced (answers to
+## DA / DSR / cursor-position-report). Forward this back to the child with
+## `pty_send` so programs that query the terminal keep working → string.
+fn Terminal::take_input ($t) {
+    Terminal::_decode("take_input", terminal__take_input(to_json({ session => $t })))
+}
+
+# ── scrollback history (kind => "history") ───────────────────────────
+
+## Page up through the scrollback buffer.
+fn Terminal::prev_page ($t) {
+    Terminal::_bare($t, "prev_page", terminal__prev_page(to_json({ session => $t })))
+}
+
+## Page down through the scrollback buffer.
+fn Terminal::next_page ($t) {
+    Terminal::_bare($t, "next_page", terminal__next_page(to_json({ session => $t })))
+}
+
+## History state → hashref { position, size, top, bottom }.
+fn Terminal::history ($t) {
+    Terminal::_decode("history", terminal__history(to_json({ session => $t })))
+}
+
+# ── PTY integration convenience (uses strykelang's built-in pty_read) ─
+
+## Read one chunk from a PTY handle and feed it into the emulator. Returns the
+## chunk, or undef at EOF. `$pty` is a handle from the built-in `pty_spawn`.
+fn Terminal::pump ($t, $pty, $timeout = 1) {
+    val $chunk = pty_read($pty, $timeout)
+    Terminal::feed($t, $chunk) if defined $chunk
+    $chunk
+}
+
+## Drain a PTY handle into the emulator until EOF (or the timeout stalls) and
+## return the rendered display → @lines. The core loop of headless terminal
+## automation: `pty_spawn` a program, `Terminal::drain` it, read the screen.
+fn Terminal::drain ($t, $pty, $timeout = 1) {
+    var $chunk
+    while (defined ($chunk = pty_read($pty, $timeout))) {
+        Terminal::feed($t, $chunk)
+    }
+    Terminal::display($t)
+}
+
+# ── direct screen commands (drive the screen without escape sequences) ─
+
+## Display text at the cursor (charset-translated, wraps per DECAWM).
+fn Terminal::draw ($t, $data) {
+    Terminal::_bare($t, "draw", terminal__draw(to_json({ session => $t, data => $data })))
+}
+
+## Move the cursor to ($line, $column), 1-based (ESC [ line;col H).
+fn Terminal::cursor_position ($t, $line = undef, $column = undef) {
+    var %args = (session => $t)
+    $args{line}   = $line   if defined $line
+    $args{column} = $column if defined $column
+    Terminal::_bare($t, "cursor_position", terminal__cursor_position(to_json(\%args)))
+}
+
+## Move the cursor to 1-based $column in the current line.
+fn Terminal::cursor_to_column ($t, $column = undef) {
+    var %args = (session => $t)
+    $args{column} = $column if defined $column
+    Terminal::_bare($t, "cursor_to_column", terminal__cursor_to_column(to_json(\%args)))
+}
+
+## Move the cursor to 1-based $line in the current column.
+fn Terminal::cursor_to_line ($t, $line = undef) {
+    var %args = (session => $t)
+    $args{line} = $line if defined $line
+    Terminal::_bare($t, "cursor_to_line", terminal__cursor_to_line(to_json(\%args)))
+}
+
+## Erase in the current line: how 0 = to end, 1 = to start, 2 = whole line.
+fn Terminal::erase_in_line ($t, $how = 0) {
+    Terminal::_bare($t, "erase_in_line",
+        terminal__erase_in_line(to_json({ session => $t, how => $how })))
+}
+
+## Erase in the display: how 0 = to end, 1 = to start, 2/3 = whole screen.
+fn Terminal::erase_in_display ($t, $how = 0) {
+    Terminal::_bare($t, "erase_in_display",
+        terminal__erase_in_display(to_json({ session => $t, how => $how })))
+}
+
+## Clear tab stop(s): how 0 = at cursor, 3 = all.
+fn Terminal::clear_tab_stop ($t, $how = 0) {
+    Terminal::_bare($t, "clear_tab_stop",
+        terminal__clear_tab_stop(to_json({ session => $t, how => $how })))
+}
+
+## Enable modes (@modes = pyte mode numbers). Pass $private = 1 for private
+## (`ESC [ ? … h`) modes like DECAWM (7), DECTCEM (25).
+fn Terminal::set_mode ($t, @modes) {
+    var $private = 0
+    Terminal::_bare($t, "set_mode",
+        terminal__set_mode(to_json({ session => $t, modes => \@modes, private => $private })))
+}
+
+## Disable modes (see set_mode).
+fn Terminal::reset_mode ($t, @modes) {
+    var $private = 0
+    Terminal::_bare($t, "reset_mode",
+        terminal__reset_mode(to_json({ session => $t, modes => \@modes, private => $private })))
+}
+
+## Enable private modes (`ESC [ ? … h`).
+fn Terminal::set_mode_private ($t, @modes) {
+    Terminal::_bare($t, "set_mode",
+        terminal__set_mode(to_json({ session => $t, modes => \@modes, private => \1 })))
+}
+
+## Disable private modes (`ESC [ ? … l`).
+fn Terminal::reset_mode_private ($t, @modes) {
+    Terminal::_bare($t, "reset_mode",
+        terminal__reset_mode(to_json({ session => $t, modes => \@modes, private => \1 })))
+}
+
+## Set display attributes (@attrs = SGR codes, e.g. 1;31 for bold red).
+fn Terminal::select_graphic_rendition ($t, @attrs) {
+    Terminal::_bare($t, "select_graphic_rendition",
+        terminal__select_graphic_rendition(to_json({ session => $t, attrs => \@attrs })))
+}
+
+## Alias for select_graphic_rendition.
+fn Terminal::sgr ($t, @attrs) {
+    Terminal::select_graphic_rendition($t, @attrs)
+}
+
+## Define G0/G1 charset. $code from "B0UV", $mode "(" for G0 or ")" for G1.
+fn Terminal::define_charset ($t, $code, $mode) {
+    Terminal::_bare($t, "define_charset",
+        terminal__define_charset(to_json({ session => $t, code => $code, mode => $mode })))
+}
+
+## Select the scrolling region (1-based $top..$bottom). No args → whole screen.
+fn Terminal::set_margins ($t, $top = undef, $bottom = undef) {
+    var %args = (session => $t)
+    $args{top}    = $top    if defined $top
+    $args{bottom} = $bottom if defined $bottom
+    Terminal::_bare($t, "set_margins", terminal__set_margins(to_json(\%args)))
+}
+
+## Report primary device attributes into the take_input buffer.
+fn Terminal::report_device_attributes ($t, $mode = 0) {
+    Terminal::_bare($t, "report_device_attributes",
+        terminal__report_device_attributes(to_json({ session => $t, mode => $mode })))
+}
+
+## Report device status (5) or cursor position (6) into the take_input buffer.
+fn Terminal::report_device_status ($t, $mode) {
+    Terminal::_bare($t, "report_device_status",
+        terminal__report_device_status(to_json({ session => $t, mode => $mode })))
+}
+
+# ── cursor movement / scrolling (count-based) ────────────────────────
+
+## Move the cursor up $count lines (default 1), stopping at the top margin.
+fn Terminal::cursor_up ($t, $count = undef) {
+    var %args = (session => $t)
+    $args{count} = $count if defined $count
+    Terminal::_bare($t, "cursor_up", terminal__cursor_up(to_json(\%args)))
+}
+
+## Move the cursor down $count lines (default 1), stopping at the bottom margin.
+fn Terminal::cursor_down ($t, $count = undef) {
+    var %args = (session => $t)
+    $args{count} = $count if defined $count
+    Terminal::_bare($t, "cursor_down", terminal__cursor_down(to_json(\%args)))
+}
+
+## Move the cursor right $count columns (default 1).
+fn Terminal::cursor_forward ($t, $count = undef) {
+    var %args = (session => $t)
+    $args{count} = $count if defined $count
+    Terminal::_bare($t, "cursor_forward", terminal__cursor_forward(to_json(\%args)))
+}
+
+## Move the cursor left $count columns (default 1).
+fn Terminal::cursor_back ($t, $count = undef) {
+    var %args = (session => $t)
+    $args{count} = $count if defined $count
+    Terminal::_bare($t, "cursor_back", terminal__cursor_back(to_json(\%args)))
+}
+
+## Move the cursor up $count lines to column 1.
+fn Terminal::cursor_up1 ($t, $count = undef) {
+    var %args = (session => $t)
+    $args{count} = $count if defined $count
+    Terminal::_bare($t, "cursor_up1", terminal__cursor_up1(to_json(\%args)))
+}
+
+## Move the cursor down $count lines to column 1.
+fn Terminal::cursor_down1 ($t, $count = undef) {
+    var %args = (session => $t)
+    $args{count} = $count if defined $count
+    Terminal::_bare($t, "cursor_down1", terminal__cursor_down1(to_json(\%args)))
+}
+
+## Insert $count blank lines at the cursor (default 1).
+fn Terminal::insert_lines ($t, $count = undef) {
+    var %args = (session => $t)
+    $args{count} = $count if defined $count
+    Terminal::_bare($t, "insert_lines", terminal__insert_lines(to_json(\%args)))
+}
+
+## Delete $count lines at the cursor (default 1).
+fn Terminal::delete_lines ($t, $count = undef) {
+    var %args = (session => $t)
+    $args{count} = $count if defined $count
+    Terminal::_bare($t, "delete_lines", terminal__delete_lines(to_json(\%args)))
+}
+
+## Insert $count blank characters at the cursor (default 1).
+fn Terminal::insert_characters ($t, $count = undef) {
+    var %args = (session => $t)
+    $args{count} = $count if defined $count
+    Terminal::_bare($t, "insert_characters", terminal__insert_characters(to_json(\%args)))
+}
+
+## Delete $count characters at the cursor (default 1).
+fn Terminal::delete_characters ($t, $count = undef) {
+    var %args = (session => $t)
+    $args{count} = $count if defined $count
+    Terminal::_bare($t, "delete_characters", terminal__delete_characters(to_json(\%args)))
+}
+
+## Erase $count characters at the cursor using cursor attributes (default 1).
+fn Terminal::erase_characters ($t, $count = undef) {
+    var %args = (session => $t)
+    $args{count} = $count if defined $count
+    Terminal::_bare($t, "erase_characters", terminal__erase_characters(to_json(\%args)))
+}
+
+# ── cursor movement / scrolling (no args) ────────────────────────────
+
+## Move the cursor to column 0 of the current line.
+fn Terminal::carriage_return ($t) {
+    Terminal::_bare($t, "carriage_return", terminal__carriage_return(to_json({ session => $t })))
+}
+
+## Move down one line, scrolling at the bottom margin (ESC D).
+fn Terminal::index ($t) {
+    Terminal::_bare($t, "index", terminal__index(to_json({ session => $t })))
+}
+
+## Move up one line, scrolling at the top margin (ESC M).
+fn Terminal::reverse_index ($t) {
+    Terminal::_bare($t, "reverse_index", terminal__reverse_index(to_json({ session => $t })))
+}
+
+## Perform an index and, if LNM is set, a carriage return.
+fn Terminal::linefeed ($t) {
+    Terminal::_bare($t, "linefeed", terminal__linefeed(to_json({ session => $t })))
+}
+
+## Move to the next tab stop.
+fn Terminal::tab ($t) {
+    Terminal::_bare($t, "tab", terminal__tab(to_json({ session => $t })))
+}
+
+## Backspace one column.
+fn Terminal::backspace ($t) {
+    Terminal::_bare($t, "backspace", terminal__backspace(to_json({ session => $t })))
+}
+
+## Save cursor state (DECSC).
+fn Terminal::save_cursor ($t) {
+    Terminal::_bare($t, "save_cursor", terminal__save_cursor(to_json({ session => $t })))
+}
+
+## Restore cursor state (DECRC).
+fn Terminal::restore_cursor ($t) {
+    Terminal::_bare($t, "restore_cursor", terminal__restore_cursor(to_json({ session => $t })))
+}
+
+## Set a horizontal tab stop at the cursor.
+fn Terminal::set_tab_stop ($t) {
+    Terminal::_bare($t, "set_tab_stop", terminal__set_tab_stop(to_json({ session => $t })))
+}
+
+## Select the G0 charset (SI).
+fn Terminal::shift_in ($t) {
+    Terminal::_bare($t, "shift_in", terminal__shift_in(to_json({ session => $t })))
+}
+
+## Select the G1 charset (SO).
+fn Terminal::shift_out ($t) {
+    Terminal::_bare($t, "shift_out", terminal__shift_out(to_json({ session => $t })))
+}
+
+## Fill the screen with uppercase E's (DECALN).
+fn Terminal::alignment_display ($t) {
+    Terminal::_bare($t, "alignment_display", terminal__alignment_display(to_json({ session => $t })))
+}
+
+## Ring the bell (a no-op stub in the emulator).
+fn Terminal::bell ($t) {
+    Terminal::_bare($t, "bell", terminal__bell(to_json({ session => $t })))
+}
+
+# ── disassembler (pyte `python -m pyte`) ─────────────────────────────
+
+## Disassemble an escape/CSI/OSC string into its parsed events → arrayref of
+## [name, [args], {kwargs}] triples. A stryke-native escape-sequence decoder.
+fn Terminal::dis ($data) {
+    Terminal::_decode("dis", terminal__dis(to_json({ data => $data })))
+}

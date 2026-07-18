@@ -1,0 +1,89 @@
+[package]
+name = "stryke-terminal"
+version = "0.1.0"
+description = "Headless VTXXX terminal emulator (faithful pyte port) for stryke. Feed raw PTY bytes (from strykelang's built-in `pty_read`/`pty_expect`) and read the rendered screen — display grid, cursor, per-cell colors + attributes, modes, scroll margins, tab stops, charsets, and scrollback history. cdylib package, loaded in-process via dlopen on first `use Terminal`; sessions persist across calls in a process-global registry. Does NOT spawn PTYs (strykelang already ships that) — it is the screen model those bytes render into."
+authors = ["MenkeTechnologies"]
+license = "MIT"
+repository = "https://github.com/MenkeTechnologies/stryke-terminal"
+edition = "2026"
+
+[ffi]
+lib-name = "stryke_terminal"
+namespace = "Terminal"
+exports = [
+    "terminal__alignment_display",
+    "terminal__backspace",
+    "terminal__bell",
+    "terminal__buffer",
+    "terminal__carriage_return",
+    "terminal__cell",
+    "terminal__clear_dirty",
+    "terminal__clear_tab_stop",
+    "terminal__cursor",
+    "terminal__cursor_back",
+    "terminal__cursor_down",
+    "terminal__cursor_down1",
+    "terminal__cursor_forward",
+    "terminal__cursor_position",
+    "terminal__cursor_to_column",
+    "terminal__cursor_to_line",
+    "terminal__cursor_up",
+    "terminal__cursor_up1",
+    "terminal__define_charset",
+    "terminal__delete_characters",
+    "terminal__delete_lines",
+    "terminal__destroy",
+    "terminal__dirty",
+    "terminal__dis",
+    "terminal__display",
+    "terminal__draw",
+    "terminal__erase_characters",
+    "terminal__erase_in_display",
+    "terminal__erase_in_line",
+    "terminal__feed",
+    "terminal__feed_bytes",
+    "terminal__history",
+    "terminal__icon_name",
+    "terminal__index",
+    "terminal__insert_characters",
+    "terminal__insert_lines",
+    "terminal__line",
+    "terminal__linefeed",
+    "terminal__mode",
+    "terminal__new",
+    "terminal__next_page",
+    "terminal__prev_page",
+    "terminal__report_device_attributes",
+    "terminal__report_device_status",
+    "terminal__reset",
+    "terminal__reset_mode",
+    "terminal__resize",
+    "terminal__restore_cursor",
+    "terminal__reverse_index",
+    "terminal__save_cursor",
+    "terminal__select_graphic_rendition",
+    "terminal__sessions",
+    "terminal__set_margins",
+    "terminal__set_mode",
+    "terminal__set_tab_stop",
+    "terminal__shift_in",
+    "terminal__shift_out",
+    "terminal__size",
+    "terminal__tab",
+    "terminal__take_input",
+    "terminal__title",
+]
+
+# Installable smoke-test launcher. `s pkg install -g` writes
+# ~/.stryke/bin/terminal-test as a sh shim that execs stryke against the store
+# entry's bin/terminal-test.stk. Permission-free: feeds a fixed escape string to
+# an in-process emulator and reads the rendered screen — no PTY, no subprocess.
+[bin]
+terminal-test = "bin/terminal-test.stk"
+
+[scripts]
+build = "cargo build --release"
+build-debug = "cargo build"
+clean = "cargo clean"
+test = "s test t/"
+install = "s pkg install -g ."

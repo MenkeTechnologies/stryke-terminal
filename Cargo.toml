@@ -1,0 +1,48 @@
+[package]
+name = "stryke-terminal"
+version = "0.1.0"
+edition = "2021"
+description = "Headless VTXXX terminal-emulator cdylib for the stryke `terminal` package — a faithful pyte port that turns raw PTY bytes into a rendered screen grid (cursor, colors, modes, scrollback)"
+authors = ["MenkeTechnologies <linux.dev25@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/MenkeTechnologies/stryke-terminal"
+homepage = "https://menketechnologies.github.io/stryke-terminal/"
+publish = false
+
+# Shipped as a precompiled cdylib loaded in-process by stryke via dlopen. Each
+# `#[no_mangle] extern "C" fn terminal__*(args_json) -> json` is registered as a
+# stryke-callable function on first `use Terminal`. Terminal sessions (a Screen
+# + its Stream parser) persist across calls in a process-global registry
+# (`common.rs`), so a script can create an emulator once, feed it PTY output
+# across many calls, and read the rendered screen.
+#
+# This is a faithful port of pyte 0.8.2 (LGPL upstream). The VT100/IBMPC charset
+# tables in `charsets.rs` and the 256-color table in `graphics.rs` are, per
+# pyte's own notes, taken from the Linux kernel (GPL) and Pygments (BSD)
+# respectively; they are reproduced verbatim for emulation parity.
+[lib]
+name = "stryke_terminal"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+# Character-cell width, matching pyte's use of the `wcwidth` library.
+unicode-width = "0.1"
+# Canonical combining class (unicodedata.combining) + NFC normalization, used
+# when folding combining marks into the preceding cell (pyte's draw()).
+unicode-normalization = "0.1"
+# JSON in/out across the FFI boundary; preserve_order keeps SGR/attribute maps
+# stable for golden-testing against pyte.
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+# Decode the base64 payload of `terminal__feed_bytes` (raw PTY output).
+base64 = "0.22"
+anyhow = "1"
+once_cell = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

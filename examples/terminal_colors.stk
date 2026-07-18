@@ -1,0 +1,29 @@
+#!/usr/bin/env stryke
+# examples/terminal_colors.stk — parse SGR color/attribute sequences and read
+# the per-cell styling out of the rendered screen.
+#
+#   stryke examples/terminal_colors.stk
+
+use Terminal
+
+val $t = Terminal::new(columns => 40, lines => 3)
+
+# 16-color, 256-color, truecolor, and text attributes in one stream.
+Terminal::feed($t, "\x1b[1;31mBOLD-RED\x1b[0m ")
+Terminal::feed($t, "\x1b[38;5;208m256-ORANGE\x1b[0m ")
+Terminal::feed($t, "\x1b[4;38;2;0;200;255mUNDER-TRUECOLOR\x1b[0m")
+
+p "display: |" . Terminal::line($t, 0) . "|"
+p ""
+
+# Inspect the styling of individual cells.
+val $b = Terminal::cell($t, 0, 0)
+p "cell(0,0):  data='$b->{data}' fg=$b->{fg} bold=$b->{bold}"
+
+val $o = Terminal::cell($t, 9, 0)
+p "cell(9,0):  data='$o->{data}' fg=$o->{fg}   (256-color → hex)"
+
+val $u = Terminal::cell($t, 20, 0)
+p "cell(20,0): data='$u->{data}' fg=$u->{fg} underscore=$u->{underscore}   (truecolor → hex)"
+
+Terminal::destroy($t)
