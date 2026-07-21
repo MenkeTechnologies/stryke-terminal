@@ -2,7 +2,7 @@
 name = "stryke-terminal"
 version = "0.1.0"
 edition = "2021"
-description = "Headless VTXXX terminal-emulator cdylib for the stryke `terminal` package — a faithful pyte port that turns raw PTY bytes into a rendered screen grid (cursor, colors, modes, scrollback)"
+description = "Headless VT-series terminal-emulator cdylib for the stryke terminal package — a pyte port turning raw PTY bytes into a rendered screen grid"
 authors = ["MenkeTechnologies <linux.dev25@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/MenkeTechnologies/stryke-terminal"
