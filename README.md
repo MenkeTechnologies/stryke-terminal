@@ -199,8 +199,9 @@ Drive the screen without escape sequences — `Terminal::draw`,
 `delete_lines`, `insert_characters`, `delete_characters`, `erase_characters`,
 `erase_in_line`, `erase_in_display`, `set_tab_stop`, `clear_tab_stop`,
 `set_mode` / `set_mode_private`, `reset_mode` / `reset_mode_private`,
-`select_graphic_rendition` (alias `sgr`), `define_charset`, `set_margins`,
-`alignment_display`, `bell`, `report_device_attributes`, `report_device_status`.
+`select_graphic_rendition` (alias `sgr`), `define_charset`, `shift_in`,
+`shift_out`, `set_margins`, `alignment_display`, `bell`,
+`report_device_attributes`, `report_device_status`.
 
 ### Disassembler
 
