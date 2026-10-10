@@ -88,12 +88,6 @@ cd stryke-terminal
 make install          # cargo build --release + s pkg install -g .
 ```
 
-Verify the whole stack end-to-end (permission-free — no PTY, no subprocess):
-
-```sh
-terminal-test
-```
-
 ## [0x02] Quick start
 
 Parse a stream of terminal output and read the rendered screen:
